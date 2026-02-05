@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Deep Sync Bot ---");
+    console.log("--- Starting Manual Math Bot ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 
@@ -16,22 +16,19 @@ async function start() {
         let rows = "";
         res.data.forEach(course => {
             if (course.name && course.enrollments && course.enrollments[0]) {
-                const grades = course.enrollments[0].grades;
+                const enrollment = course.enrollments[0];
                 
-                // We are going to try to pull the 'current_score' 
-                // but specifically from the grades object which handles the 80/20 split
-                let reportGrade = grades?.current_score;
+                // Use final_score if available (includes zeros), otherwise use computed_final_score
+                let finalScore = enrollment.grades?.final_score || enrollment.computed_final_score;
 
-                // If the teacher has 'Muted' grades, current_score might be wrong.
-                // We check if 'final_score' is lower and use that to capture missing work.
-                if (grades?.final_score && grades.final_score < reportGrade) {
-                    reportGrade = grades.final_score;
+                // If it's still pulling that 72% for Hogan, we force it to look at the 'current_score'
+                // and pick the lower of the two. The lower one is almost always the one with zeros included.
+                if (enrollment.grades?.current_score && enrollment.grades.current_score < finalScore) {
+                    finalScore = enrollment.grades.current_score;
                 }
 
-                // If it's still coming up as 72% for Hogan, it's because the API 
-                // is being restricted by your school's 'Hide totals' setting.
-                const displayScore = (reportGrade !== undefined && reportGrade !== null) 
-                    ? reportGrade.toFixed(2) 
+                const displayScore = (finalScore !== undefined && finalScore !== null) 
+                    ? finalScore 
                     : "N/A";
 
                 rows += `<tr>
@@ -53,11 +50,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Deep Sync Report: ${new Date().toLocaleDateString()}`,
-            html: `<h3>80/20 Weighted Match</h3><table border="1" style="border-collapse:collapse;">${rows}</table>`
+            subject: `Dashboard Match Test: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Dashboard Match Attempt</h3><table border="1" style="border-collapse:collapse;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: Deep Sync Sent.");
+        console.log("✅ SUCCESS: Manual Math Report Sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
