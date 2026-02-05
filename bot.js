@@ -2,14 +2,10 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Direct Dashboard Sync ---");
+    console.log("--- Starting Grade Lock-Picker ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
-            params: { 
-                'per_page': 100, 
-                'enrollment_state': 'active',
-                'include[]': ['total_scores'] 
-            },
+            params: { 'per_page': 100, 'enrollment_state': 'active' },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
@@ -17,25 +13,45 @@ async function start() {
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // Extracting the specific grade fields from the enrollment object
-            const enrollment = course.enrollments?.[0];
-            const grades = enrollment?.grades;
+            // 1. Get the category scores directly (Summative 80% / Formative 20%)
+            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
+                headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+            });
 
-            // 'current_score' usually matches the 78% / 82% 
-            // 'final_score' matches Hogan's 64% by including zeros for missing work
-            let displayGrade = grades?.current_score;
-            
-            if (course.name.includes("Hogan")) {
-                displayGrade = grades?.final_score || grades?.current_score;
+            let weightedSum = 0;
+            let weightTotal = 0;
+
+            groupsRes.data.forEach(group => {
+                const weight = group.group_weight || 0;
+                // 'group_score' is the API's way of showing the category total
+                const score = group.group_score !== undefined ? group.group_score : null;
+
+                if (weight > 0 && score !== null) {
+                    weightedSum += (score * (weight / 100));
+                    weightTotal += (weight / 100);
+                }
+            });
+
+            // 2. Final Calculation - Rebuilding what the App shows
+            let finalDisplay = weightTotal > 0 
+                ? (weightedSum / weightTotal).toFixed(2) 
+                : "N/A";
+
+            // 3. Emergency fallback if categories are hidden too
+            if (finalDisplay === "N/A" || finalDisplay === "0.00") {
+                const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
+                    params: { 'user_id': 'self' },
+                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+                });
+                const grades = enrollRes.data[0]?.grades;
+                finalDisplay = (grades?.final_score || grades?.current_score || 0).toFixed(2);
             }
-
-            const finalDisplay = displayGrade ? displayGrade.toFixed(2) : "N/A";
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
                         <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalDisplay}%</b></td>
                      </tr>`;
-            console.log(`${course.name}: ${finalDisplay}%`);
+            console.log(`Lock-Picked ${course.name}: ${finalDisplay}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -46,10 +62,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Direct Sync Report: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Dashboard Matched Grades</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `Dashboard Exact Match: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Bypassing API Restrictions</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-        console.log("✅ SUCCESS: Direct sync sent.");
+
+        console.log("✅ SUCCESS: Match report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
