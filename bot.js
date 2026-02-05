@@ -17,8 +17,6 @@ async function start() {
         });
 
         let rows = "";
-        let courseCount = 0;
-
         res.data.forEach(course => {
             if (course.name && course.enrollments) {
                 const score = course.enrollments[0]?.computed_current_score ?? "N/A";
@@ -26,20 +24,15 @@ async function start() {
                             <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
                             <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${score}%</b></td>
                          </tr>`;
-                courseCount++;
-                console.log(`Found: ${course.name} - ${score}%`);
+                console.log(`Course Found: ${course.name} (${score}%)`);
             }
         });
 
-        if (courseCount === 0) {
-            console.log("No active courses with grades found.");
-            return;
-        }
-
-        // 2. Email Setup (Gmail)
-        console.log("Configuring Mailer...");
+        // 2. Email Setup
         let transporter = nodemailer.createTransport({
-            service: 'gmail',
+            host: "smtp.gmail.com",
+            port: 465,
+            secure: true, // Use SSL
             auth: {
                 user: process.env.EMAIL_USER,
                 pass: process.env.EMAIL_PASS
@@ -48,45 +41,24 @@ async function start() {
 
         // 3. Send Email
         console.log("Attempting to send email...");
-        const mailOptions = {
-            from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
+        const info = await transporter.sendMail({
+            from: `"GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Weekly Grade Report - ${new Date().toLocaleDateString()}`,
-            html: `
-                <div style="font-family: Arial, sans-serif;">
-                    <h2>Your Weekly Grades</h2>
-                    <table style="border-collapse: collapse; width: 100%; max-width: 500px;">
-                        <thead>
-                            <tr style="background: #f2f2f2;">
-                                <th style="padding:10px; border:1px solid #ddd; text-align:left;">Course</th>
-                                <th style="padding:10px; border:1px solid #ddd; text-align:center;">Grade</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            ${rows}
-                        </tbody>
-                    </table>
-                    <p style="font-size: 12px; color: #666; margin-top: 20px;">
-                        Generated automatically via GitHub Actions.
-                    </p>
-                </div>
-            `
-        };
+            subject: `Grade Report: ${new Date().toLocaleDateString()}`,
+            html: `<h2>Weekly Grades</h2><table border="1" style="border-collapse:collapse;">${rows}</table>`
+        });
 
-        // The Fix: Await the send so the script doesn't close early
-        let info = await transporter.sendMail(mailOptions);
-        
-        console.log("✅ SUCCESS: Email sent to carterdiesel957@gmail.com");
+        console.log("✅ SUCCESS: Email sent!");
         console.log("Message ID:", info.messageId);
 
+        // Wait 5 seconds before closing to ensure the connection finishes
+        console.log("Finalizing connection...");
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
     } catch (error) {
-        console.error("❌ ERROR FOUND:");
-        if (error.response) {
-            console.error(`Canvas API Status: ${error.response.status}`);
-        } else {
-            console.error(error.message);
-        }
-        process.exit(1); // Forces GitHub Action to show as Red/Failed
+        console.error("❌ ERROR:");
+        console.error(error.message);
+        process.exit(1); 
     }
 }
 
