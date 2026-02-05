@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Manual Weight Calculation ---");
+    console.log("--- Starting Deep Math Sync ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
@@ -10,37 +10,46 @@ async function start() {
         });
 
         let rows = "";
-
         for (const course of res.data) {
             if (!course.name) continue;
 
-            // 1. Get the weighted groups (Summative/Formative)
+            // Pulling the specific 80/20 weights directly from the course settings
             const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let finalGrade = "N/A";
-            
-            // 2. Check for the weighted 'Dashboard' total specifically
-            const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
-                params: { 'user_id': 'self' },
-                headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+            let weightedSum = 0;
+            let weightDenominator = 0;
+
+            groupsRes.data.forEach(group => {
+                const weight = group.group_weight || 0;
+                // Using 'raw' unweighted_score to bypass the "Current Score" lie
+                const score = group.assignments?.[0]?.unweighted_score || group.assignments?.[0]?.score || 0;
+
+                if (weight > 0) {
+                    weightedSum += (score * (weight / 100));
+                    weightDenominator += (weight / 100);
+                }
             });
 
-            const grades = enrollRes.data[0]?.grades;
-            
-            // We use 'final_score' because it matches the Dashboard by including zeros
-            if (grades?.final_score !== null && grades?.final_score !== undefined) {
-                finalGrade = grades.final_score.toFixed(2) + "%";
-            } else if (grades?.current_score !== null) {
-                finalGrade = grades.current_score.toFixed(2) + "%";
+            // If manual math fails, force pull the dashboard 'final_score' (includes zeros)
+            let finalGrade;
+            if (weightDenominator > 0) {
+                finalGrade = (weightedSum / weightDenominator).toFixed(2);
+            } else {
+                const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
+                    params: { 'user_id': 'self' },
+                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+                });
+                const grades = enrollRes.data[0]?.grades;
+                finalGrade = grades?.final_score || grades?.current_score || "N/A";
             }
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalGrade}</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalGrade}${finalGrade !== "N/A" ? "%" : ""}</b></td>
                      </tr>`;
-            console.log(`${course.name}: ${finalGrade}`);
+            console.log(`Synced ${course.name}: ${finalGrade}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -51,16 +60,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Dashboard Match Report: ${new Date().toLocaleDateString()}`,
-            html: `<div style="font-family:sans-serif;">
-                    <h2>Calculated Weighted Grades</h2>
-                    <table border="1" style="border-collapse:collapse; width:100%; max-width:500px;">
-                        ${rows}
-                    </table>
-                   </div>`
+            subject: `Deep Math Report: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Dashboard Matched Report</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: Manual match sent.");
+        console.log("✅ SUCCESS: Deep Math report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
