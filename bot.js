@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Emergency Dashboard Extraction ---");
+    console.log("--- Starting Sniper Calculation ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
@@ -13,26 +13,35 @@ async function start() {
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // This is the EXACT call the mobile app makes to get the dashboard percentage
-            const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
-                params: { 'user_id': 'self' },
+            // 1. Get ONLY the assignments for this course
+            const assignRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignments`, {
+                params: { 'include[]': ['submission'], 'per_page': 50 },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            const grades = enrollRes.data[0]?.grades;
-            
-            // For Hogan/Core classes, we use 'final_score' to ensure it matches the app's 0-penalty logic
-            let finalPercent = grades?.final_score || grades?.current_score || "0.00";
-            
-            if (typeof finalPercent === 'number') {
-                finalPercent = finalPercent.toFixed(2);
-            }
+            let ptsEarned = 0;
+            let ptsPossible = 0;
+
+            // 2. Add up every single point we can find
+            assignRes.data.forEach(a => {
+                const max = a.points_possible || 0;
+                if (max > 0) {
+                    ptsPossible += max;
+                    // Force 0 if missing. If Hogan has 1 assignment, this grabs it.
+                    ptsEarned += (a.submission?.score || 0);
+                }
+            });
+
+            // 3. Raw Math: (Earned / Possible) * 100
+            let finalVal = ptsPossible > 0 
+                ? ((ptsEarned / ptsPossible) * 100).toFixed(2) 
+                : "0.00";
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalPercent}%</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalVal}%</b></td>
                      </tr>`;
-            console.log(`Extracted ${course.name}: ${finalPercent}%`);
+            console.log(`${course.name}: ${finalVal}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -43,11 +52,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `DASHBOARD SYNC SUCCESS: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Direct Mobile Dashboard Extraction</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `Sniper Match Report: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Raw Score Only Match</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: The dashboard numbers have been extracted.");
+        console.log("✅ SUCCESS: Sniper report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
     }
