@@ -1,0 +1,34 @@
+name: Send Weekly Grades
+
+on:
+  schedule:
+    # This runs at 22:00 UTC (5:00 PM EST) every Friday
+    - cron: '0 22 * * 5'
+  # This button allows you to send the report manually from GitHub
+  workflow_dispatch:
+
+jobs:
+  run-grade-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Dependencies
+        run: npm install
+
+      - name: Execute Grade Bot
+        env:
+          # These must match the names in your GitHub Secrets exactly
+          CANVAS_API_KEY: ${{ secrets.CANVAS_API_KEY }}
+          CANVAS_URL: "https://kaneland.instructure.com"
+          TARGET_EMAIL: "carterdiesel957@gmail.com"
+          EMAIL_USER: ${{ secrets.EMAIL_USER }}
+          EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
+        run: node bot.js
