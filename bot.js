@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Deep Assignment Re-Calculation ---");
+    console.log("--- Starting Final Decimal Correction ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
@@ -13,9 +13,8 @@ async function start() {
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // 1. Get the official weighting (like Summative 80%) for this class
             const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
-                params: { 'include[]': ['assignments'], 'override_assignment_group_id': 'true' },
+                params: { 'include[]': ['assignments'] },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
@@ -27,40 +26,31 @@ async function start() {
                 let earnedInGroup = 0;
                 let possibleInGroup = 0;
 
-                // 2. Loop through every assignment in this group
-                if (group.assignments) {
-                    for (const a of group.assignments) {
-                        const pointsPossible = a.points_possible || 0;
-                        if (pointsPossible > 0) {
-                            // 3. Get the score (Force 0 if missing/null to match Dashboard)
-                            const submission = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignments/${a.id}/submissions/self`, {
-                                headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
-                            });
-                            
-                            const score = submission.data.score || 0;
-                            earnedInGroup += score;
-                            possibleInGroup += pointsPossible;
-                        }
+                group.assignments?.forEach(a => {
+                    const possible = a.points_possible || 0;
+                    if (possible > 0) {
+                        possibleInGroup += possible;
+                        // Force 0 for missing to hit Hogan's 64.71%
+                        earnedInGroup += (a.submission?.score || 0);
                     }
-                }
+                });
 
-                // 4. Calculate this group's contribution (e.g., how much of the 80% did you get?)
                 if (possibleInGroup > 0 && groupWeight > 0) {
-                    weightedScoreTotal += (earnedInGroup / possibleInGroup) * groupWeight;
-                    totalWeightUsed += groupWeight;
+                    // Multiply by 100 here to fix the 0.61% -> 61% error
+                    const groupGrade = (earnedInGroup / possibleInGroup) * 100;
+                    weightedScoreTotal += (groupGrade * (groupWeight / 100));
+                    totalWeightUsed += (groupWeight / 100);
                 }
             }
 
-            // 5. Final calculation (Normalizing to 100%)
+            // Normalizing result
             let finalResult = totalWeightUsed > 0 
                 ? (weightedScoreTotal / totalWeightUsed).toFixed(2) 
                 : "0.00";
 
-            rows += `<tr>
-                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalResult}%</b></td>
-                     </tr>`;
-            console.log(`Deep Calc: ${course.name} = ${finalResult}%`);
+            rows += `<tr><td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                     <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalResult}%</b></td></tr>`;
+            console.log(`${course.name}: ${finalResult}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -71,11 +61,10 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Deep Re-Calculation: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Manual Assignment-Level Math</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `FINAL Match Report: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Assignment-Level Percentages Fixed</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-
-        console.log("✅ SUCCESS: Re-calculation complete.");
+        console.log("✅ SUCCESS: Decimal fix sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
     }
