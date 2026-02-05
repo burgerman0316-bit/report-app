@@ -1,8 +1,8 @@
 name: Send Weekly Grades
 on:
   schedule:
-    - cron: '0 14 * * 5' # Runs at 14:00 UTC (9:00 AM EST) every Friday
-  workflow_dispatch: # This adds a "Run Now" button in GitHub Actions
+    - cron: '0 22 * * 5' # Runs at 14:00 UTC (9:00 AM EST) every Friday
+  workflow_dispatch: # This ad  ds a "Run Now" button in GitHub Actions
 
 jobs:
   build:
