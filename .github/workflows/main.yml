@@ -1,31 +1,30 @@
 name: Send Weekly Grades
 
 on:
+  workflow_dispatch: # This adds the "Run" button manually
   schedule:
-    # This is 5:00 PM EST (22:00 UTC) every Friday
-    - cron: '0 22 * * 5'
-  workflow_dispatch: # This enables the "Run Now" button
+    - cron: '0 22 * * 5' # 5:00 PM EST every Friday
 
 jobs:
   run-grade-bot:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
+      - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Set up Node.js
+      - name: Setup Node
         uses: actions/setup-node@v3
         with:
           node-version: '18'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: npm install axios nodemailer
 
-      - name: Run the bot
+      - name: Execute Bot
         env:
           CANVAS_API_KEY: ${{ secrets.CANVAS_API_KEY }}
-          CANVAS_URL: ${{ secrets.CANVAS_URL }}
-          TARGET_EMAIL: ${{ secrets.TARGET_EMAIL }}
+          CANVAS_URL: "https://kaneland.instructure.com"
+          TARGET_EMAIL: "carterdiesel957@gmail.com"
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
         run: node bot.js
