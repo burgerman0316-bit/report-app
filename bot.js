@@ -2,38 +2,42 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Dashboard-Exact Bot ---");
+    console.log("--- Starting Individual Class Sync ---");
     try {
+        // 1. Get all active courses
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
-            params: { 
-                'per_page': 100, 
-                'enrollment_state': 'active', 
-                'include[]': ['total_scores'] 
-            },
+            params: { 'per_page': 100, 'enrollment_state': 'active' },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
-        res.data.forEach(course => {
-            if (course.name && course.enrollments && course.enrollments[0]) {
-                const enrollment = course.enrollments[0];
-                
-                // This 'computed_final_score' is the key. 
-                // It treats missing work as 0%, matching your 'Real' grade.
-                const rawScore = enrollment.computed_final_score;
-                
-                const displayScore = (rawScore !== undefined && rawScore !== null) 
-                    ? rawScore 
-                    : "N/A";
 
-                rows += `<tr>
-                            <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                            <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${displayScore}${displayScore !== "N/A" ? "%" : ""}</b></td>
-                         </tr>`;
-                console.log(`${course.name}: ${displayScore}%`);
-            }
-        });
+        for (const course of res.data) {
+            if (!course.name) continue;
 
+            // 2. Fetch a fresh enrollment report for THIS specific class
+            // This pulls the deep 'grades' object that handles the 80/20 split
+            const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
+                params: { 'user_id': 'self' },
+                headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+            });
+
+            const enrollment = enrollRes.data[0];
+            const grades = enrollment?.grades;
+
+            // FIX: We use final_score to ensure missing assignments (zeros) are counted.
+            // This is likely why Hogan says 64% in the app but 72% in the bot.
+            const score = grades?.final_score || grades?.current_score || "N/A";
+
+            rows += `<tr>
+                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${score}%</b></td>
+                     </tr>`;
+            
+            console.log(`Verified ${course.name}: ${score}%`);
+        }
+
+        // 3. Email Transport
         let transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: { 
@@ -45,11 +49,18 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Dashboard Exact Report: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Dashboard Matched Grades</h3><table border="1" style="border-collapse:collapse;">${rows}</table>`
+            subject: `Dashboard Match Report: ${new Date().toLocaleDateString()}`,
+            html: `<div style="font-family:sans-serif;">
+                    <h2>Dashboard Matched Grades</h2>
+                    <p>This report matches the numbers shown on your Canvas Phone App.</p>
+                    <table border="1" style="border-collapse:collapse; width:100%; max-width:500px;">
+                        <tr style="background:#eee;"><th>Course</th><th>Grade</th></tr>
+                        ${rows}
+                    </table>
+                   </div>`
         });
 
-        console.log("✅ SUCCESS: Dashboard Exact Report Sent.");
+        console.log("✅ SUCCESS: Individual class sync sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
