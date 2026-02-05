@@ -1,90 +1,63 @@
-require('dotenv').config(); // Load environment variables
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
     try {
-        console.log("🚀 Fetching grades from Canvas...");
-
-        // We use include[]: 'total_scores' to get the grades directly in the first call
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
-            params: { 
-                'per_page': 100, 
-                'enrollment_state': 'active',
-                'include[]': 'total_scores' 
-            },
+            params: { 'per_page': 100, 'enrollment_state': 'active' },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
-
         for (const course of res.data) {
-            // Skip courses that are blank or Homeroom
-            if (!course.name || course.name.toLowerCase().includes("homeroom")) continue;
+            if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // Extract enrollment data (where grades live)
-            const enrollment = course.enrollments ? course.enrollments[0] : null;
-            
-            let score = "0.00";
-            let letter = "N/A";
+            // 1. Get the pre-calculated category scores from Canvas
+            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
+                headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+            });
 
-            if (enrollment && enrollment.computed_current_score !== null) {
-                score = enrollment.computed_current_score.toFixed(2);
-                letter = enrollment.computed_current_grade || ""; // e.g., "A-", "B+"
+            let weightedSum = 0;
+            let weightTotal = 0;
+
+            groupsRes.data.forEach(group => {
+                const weight = group.group_weight || 0;
+                // 'group_score' is the ONLY field that matches the phone app
+                const score = group.group_score;
+
+                if (weight > 0 && score !== null && score !== undefined) {
+                    weightedSum += (score * (weight / 100));
+                    weightTotal += (weight / 100);
+                }
+            });
+
+            // 2. Normalize to 100%
+            let finalGrade = weightTotal > 0 ? (weightedSum / weightTotal).toFixed(2) : "N/A";
+
+            // 3. Fallback for classes like PE that don't use weights
+            if (finalGrade === "N/A" || finalGrade === "0.00") {
+                const enroll = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
+                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+                });
+                finalGrade = (enroll.data[0]?.grades?.current_score || 0).toFixed(2);
             }
 
-            // Dark Mode styling for the email to match your screenshots
-            rows += `
-                <tr style="border-bottom: 1px solid #333;">
-                    <td style="padding:15px; color: #ffffff; font-size: 14px;">
-                        ${course.name}
-                    </td>
-                    <td style="padding:15px; text-align: right; color: #ffffff; font-size: 16px;">
-                        <span style="background: #333; padding: 4px 8px; border-radius: 4px; font-weight: bold;">
-                            ${score}% ${letter ? `(${letter})` : ''}
-                        </span>
-                    </td>
-                </tr>`;
+            rows += `<tr><td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                     <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalGrade}%</b></td></tr>`;
         }
 
-        // Setup Email Transporter
         let transporter = nodemailer.createTransport({
             service: 'gmail',
-            auth: { 
-                user: process.env.EMAIL_USER.trim(), 
-                pass: process.env.EMAIL_PASS.trim() 
-            }
+            auth: { user: process.env.EMAIL_USER.trim(), pass: process.env.EMAIL_PASS.trim() }
         });
-
-        // HTML Email Template
-        const htmlBody = `
-            <div style="background-color: #000000; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;">
-                <h2 style="color: #ffffff; border-bottom: 2px solid #333; padding-bottom: 10px;">Core Class Sync</h2>
-                <table style="width: 100%; border-collapse: collapse;">
-                    ${rows}
-                </table>
-                <p style="color: #666; font-size: 12px; margin-top: 20px;">
-                    Last Updated: ${new Date().toLocaleString()}
-                </p>
-            </div>
-        `;
 
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
             subject: `CORE CLASS SYNC: ${new Date().toLocaleDateString()}`,
-            html: htmlBody
+            html: `<table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-
-        console.log("✅ Report Sent Successfully.");
-    } catch (error) {
-        console.error("❌ Error running script:");
-        if (error.response) {
-            console.error(`Status: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-        } else {
-            console.error(error.message);
-        }
-    }
+        console.log("✅ Report Sent.");
+    } catch (error) { console.error(error); }
 }
-
 start();
