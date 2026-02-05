@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Perfect Weight Calculation ---");
+    console.log("--- Starting Brute Force Calculation ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
@@ -11,66 +11,68 @@ async function start() {
 
         let rows = "";
         for (const course of res.data) {
-            if (!course.name) continue;
+            if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // 1. Get the official weighting groups (The 80/20 buckets)
-            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
+            // 1. Get every single assignment and submission for this specific course
+            const assignRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignments`, {
+                params: { 'include[]': ['submission'], 'per_page': 100 },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let weightedSum = 0;
-            let totalWeightUsed = 0;
+            let sumScore = 0, sumMax = 0;
+            let formScore = 0, formMax = 0;
 
-            // 2. Calculate based on the school's official weighted categories
-            groupsRes.data.forEach(group => {
-                const weight = group.group_weight || 0;
-                // 'group_score' is the grade for that specific category (Summative or Formative)
-                const score = group.group_score !== undefined ? group.group_score : null;
+            assignRes.data.forEach(a => {
+                const max = a.points_possible || 0;
+                if (max === 0) return;
 
-                if (weight > 0 && score !== null) {
-                    weightedSum += (score * (weight / 100));
-                    totalWeightUsed += (weight / 100);
+                // Treat empty/unsubmitted as 0 to match the App's 'Final Grade'
+                const score = a.submission?.score || 0;
+
+                // We'll check the 'assignment_group_id' or name for the 80/20 split
+                const isSummative = a.name.toLowerCase().includes('summative') || 
+                                    (a.assignment_group_id && a.name.toLowerCase().includes('test'));
+
+                if (isSummative) {
+                    sumScore += score; sumMax += max;
+                } else {
+                    formScore += score; formMax += max;
                 }
             });
 
-            // 3. Final Calculation
-            let finalCalc = totalWeightUsed > 0 
-                ? (weightedSum / totalWeightUsed).toFixed(2) 
-                : null;
+            // 2. Force the 80/20 Math ourselves
+            const sPerc = sumMax > 0 ? (sumScore / sumMax) : null;
+            const fPerc = formMax > 0 ? (formScore / formMax) : null;
 
-            // Fallback: If no weights are found, pull the 'final_score' (includes zeros)
-            if (finalCalc === null || finalCalc == 0) {
-                const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
-                    params: { 'user_id': 'self' },
-                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
-                });
-                const grades = enrollRes.data[0]?.grades;
-                finalCalc = (grades?.final_score || grades?.current_score || 0).toFixed(2);
+            let finalPercent = 0;
+            if (sPerc !== null && fPerc !== null) {
+                finalPercent = (sPerc * 80) + (fPerc * 20);
+            } else {
+                // If the class doesn't use 80/20, use raw points (zeros included)
+                finalPercent = ((sumScore + formScore) / (sumMax + formMax)) * 100;
             }
 
+            const display = finalPercent.toFixed(2);
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalCalc}%</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${display}%</b></td>
                      </tr>`;
-            console.log(`${course.name}: ${finalCalc}%`);
+            console.log(`Brute Force ${course.name}: ${display}%`);
         }
 
         let transporter = nodemailer.createTransport({
             service: 'gmail',
-            auth: { 
-                user: process.env.EMAIL_USER.trim(), 
-                pass: process.env.EMAIL_PASS.trim() 
-            }
+            auth: { user: process.env.EMAIL_USER.trim(), pass: process.env.EMAIL_PASS.trim() }
         });
 
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Verified Grade Match: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Dashboard Exact Match Report</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `Brute Force Match: ${new Date().toLocaleDateString()}`,
+            html: `<h3>No-Summary Weighted Report</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: Final calculation sent.");
+        console.log("✅ SUCCESS: Brute Force Match Sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
