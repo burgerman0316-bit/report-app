@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Canvas Grade Reporter</title>
+    <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@3/dist/email.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; background: #f4f7f6; padding: 40px; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); max-width: 500px; margin: auto; }
+        input, button { width: 100%; padding: 12px; margin: 10px 0; border-radius: 6px; border: 1px solid #ddd; box-sizing: border-box; }
+        button { background: #007bff; color: white; border: none; cursor: pointer; font-weight: bold; }
+        button:hover { background: #0056b3; }
+        .status { font-size: 0.9em; text-align: center; color: #666; }
+        table { width: 100%; margin-top: 20px; border-collapse: collapse; }
+        td, th { padding: 10px; border-bottom: 1px solid #eee; text-align: left; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>📊 Grade Reporter</h2>
+    <input type="text" id="canvasUrl" placeholder="Canvas URL (e.g. https://canvas.instructure.com)">
+    <input type="password" id="apiToken" placeholder="Canvas API Token">
+    <input type="email" id="targetEmail" placeholder="Send Report To (Email)">
+    
+    <button onclick="generateAndSend()">🚀 Send Grade Report Now</button>
+    <p class="status" id="statusText">Enter details and click send.</p>
+
+    <div id="preview"></div>
+</div>
+
+<script>
+    // Initialize EmailJS (Replace with your Public Key)
+    emailjs.init("YOUR_PUBLIC_KEY");
+
+    async function generateAndSend() {
+        const status = document.getElementById('statusText');
+        const token = document.getElementById('apiToken').value;
+        const canvasUrl = document.getElementById('canvasUrl').value;
+        const targetEmail = document.getElementById('targetEmail').value;
+
+        if (!token || !canvasUrl) return alert("Please fill in all fields");
+
+        status.innerText = "Fetching grades...";
+
+        try {
+            // Using a CORS proxy because Canvas blocks direct browser requests
+            const proxy = "https://cors-anywhere.herokuapp.com/"; 
+            const response = await fetch(`${proxy}${canvasUrl}/api/v1/courses?include[]=total_scores&enrollment_state=active`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            const courses = await response.json();
+            let rowsHtml = "";
+
+            courses.forEach(c => {
+                if (c.name) {
+                    const score = c.enrollments?.[0]?.computed_current_score || "N/A";
+                    rowsHtml += `<tr><td style="padding:8px;border:1px solid #ddd;">${c.name}</td><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">${score}%</td></tr>`;
+                }
+            });
+
+            status.innerText = "Sending Email...";
+
+            await emailjs.send("YOUR_SERVICE_ID", "YOUR_TEMPLATE_ID", {
+                to_email: targetEmail,
+                course_rows: rowsHtml
+            });
+
+            status.innerText = "✅ Report sent successfully!";
+        } catch (err) {
+            status.innerText = "❌ Error: " + err.message;
+            console.error(err);
+        }
+    }
+</script>
+</body>
+</html>
