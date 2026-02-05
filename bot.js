@@ -1,64 +1,93 @@
 const axios = require('axios');
 const nodemailer = require('nodemailer');
 
-// These will be stored securely in GitHub Secrets
-const CANVAS_API_KEY = process.env.CANVAS_API_KEY;
-const CANVAS_URL = process.env.CANVAS_URL; // e.g., https://canvas.instructure.com
-const TARGET_EMAIL = process.env.TARGET_EMAIL;
+async function start() {
+    console.log("--- Starting Grade Bot ---");
 
-async function sendGradeReport() {
     try {
-        // 1. Fetch Courses and Grades
-        const response = await axios.get(`${CANVAS_URL}/api/v1/courses`, {
-            params: { 'include[]': 'total_scores', 'enrollment_state': 'active' },
-            headers: { 'Authorization': `Bearer ${CANVAS_API_KEY}` }
+        // 1. Fetch from Canvas
+        console.log("Connecting to Canvas...");
+        const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
+            params: { 
+                'per_page': 100,
+                'enrollment_state': 'active',
+                'include[]': 'total_scores' 
+            },
+            headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
-        let rowsHtml = "";
-        response.data.forEach(course => {
-            if (course.name) {
-                const score = course.enrollments?.[0]?.computed_current_score || "N/A";
-                rowsHtml += `
-                    <tr>
-                        <td style="padding:10px; border-bottom:1px solid #eee;">${course.name}</td>
-                        <td style="padding:10px; border-bottom:1px solid #eee; font-weight:bold;">${score}%</td>
-                    </tr>`;
+        let rows = "";
+        let courseCount = 0;
+
+        res.data.forEach(course => {
+            if (course.name && course.enrollments) {
+                const score = course.enrollments[0]?.computed_current_score ?? "N/A";
+                rows += `<tr>
+                            <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                            <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${score}%</b></td>
+                         </tr>`;
+                courseCount++;
+                console.log(`Found: ${course.name} - ${score}%`);
             }
         });
 
-        // 2. Email Formatting
-        const emailBody = `
-            <div style="font-family: sans-serif; max-width: 600px; border: 1px solid #ddd; padding: 20px;">
-                <h2 style="color: #E74C3C;">Friday Grade Update</h2>
-                <table style="width: 100%; border-collapse: collapse;">
-                    <tr style="background: #f8f8f8;">
-                        <th style="text-align:left; padding:10px;">Course</th>
-                        <th style="text-align:left; padding:10px;">Grade</th>
-                    </tr>
-                    ${rowsHtml}
-                </table>
-            </div>`;
+        if (courseCount === 0) {
+            console.log("No active courses with grades found.");
+            return;
+        }
 
-        // 3. Send via SMTP (Example using Gmail)
+        // 2. Email Setup (Gmail)
+        console.log("Configuring Mailer...");
         let transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: {
                 user: process.env.EMAIL_USER,
-                pass: process.env.EMAIL_PASS // Use an "App Password" here
+                pass: process.env.EMAIL_PASS
             }
         });
 
-        await transporter.sendMail({
-            from: '"GradeBot" <your-email@gmail.com>',
-            to: TARGET_EMAIL,
-            subject: "Your Weekly Grade Report",
-            html: emailBody
-        });
+        // 3. Send Email
+        console.log("Attempting to send email...");
+        const mailOptions = {
+            from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
+            to: "carterdiesel957@gmail.com", 
+            subject: `Weekly Grade Report - ${new Date().toLocaleDateString()}`,
+            html: `
+                <div style="font-family: Arial, sans-serif;">
+                    <h2>Your Weekly Grades</h2>
+                    <table style="border-collapse: collapse; width: 100%; max-width: 500px;">
+                        <thead>
+                            <tr style="background: #f2f2f2;">
+                                <th style="padding:10px; border:1px solid #ddd; text-align:left;">Course</th>
+                                <th style="padding:10px; border:1px solid #ddd; text-align:center;">Grade</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows}
+                        </tbody>
+                    </table>
+                    <p style="font-size: 12px; color: #666; margin-top: 20px;">
+                        Generated automatically via GitHub Actions.
+                    </p>
+                </div>
+            `
+        };
 
-        console.log("Report sent successfully!");
+        // The Fix: Await the send so the script doesn't close early
+        let info = await transporter.sendMail(mailOptions);
+        
+        console.log("✅ SUCCESS: Email sent to carterdiesel957@gmail.com");
+        console.log("Message ID:", info.messageId);
+
     } catch (error) {
-        console.error("Error running GradeBot:", error);
+        console.error("❌ ERROR FOUND:");
+        if (error.response) {
+            console.error(`Canvas API Status: ${error.response.status}`);
+        } else {
+            console.error(error.message);
+        }
+        process.exit(1); // Forces GitHub Action to show as Red/Failed
     }
 }
 
-sendGradeReport();
+start();
