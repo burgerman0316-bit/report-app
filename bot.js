@@ -8,7 +8,7 @@ async function start() {
             params: { 
                 'per_page': 100, 
                 'enrollment_state': 'active', 
-                'include[]': ['total_scores', 'current_gradeless_enrollment'] 
+                'include[]': ['total_scores'] 
             },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
@@ -16,21 +16,20 @@ async function start() {
         let rows = "";
         res.data.forEach(course => {
             if (course.name && course.enrollments && course.enrollments[0]) {
-                const enrollment = course.enrollments[0];
+                const grades = course.enrollments[0].grades;
                 
-                // Priority 1: Weighted Grade (The 80/20 split)
-                // Priority 2: Current Score
-                // Priority 3: Final Score
-                const score = enrollment.grades?.current_score 
-                           || enrollment.computed_current_score 
-                           || enrollment.computed_final_score 
+                // FORCE 'final_score' to capture missing work/zeros
+                // This matches the Dashboard app view
+                const score = grades?.final_score 
+                           || grades?.current_score 
+                           || course.enrollments[0].computed_final_score 
                            || "N/A";
 
                 rows += `<tr>
                             <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
                             <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${score}${score !== "N/A" ? "%" : ""}</b></td>
                          </tr>`;
-                console.log(`Course: ${course.name} | Grade: ${score}`);
+                console.log(`${course.name}: ${score}%`);
             }
         });
 
@@ -45,11 +44,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Updated Grade Report: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Your Grades</h3><table border="1" style="border-collapse:collapse;">${rows}</table>`
+            subject: `Final Grade Match: ${new Date().toLocaleDateString()}`,
+            html: `<div style="font-family:sans-serif;"><h3>Dashboard Match Report</h3><table border="1" style="border-collapse:collapse;">${rows}</table></div>`
         });
 
-        console.log("✅ SUCCESS: Report Sent.");
+        console.log("✅ SUCCESS: App-matched report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
