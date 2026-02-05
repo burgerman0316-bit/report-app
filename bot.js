@@ -8,27 +8,29 @@ async function start() {
             params: { 
                 'per_page': 100, 
                 'enrollment_state': 'active', 
-                'include[]': 'total_scores' 
+                'include[]': ['total_scores', 'current_gradeless_enrollment'] 
             },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
         res.data.forEach(course => {
-            if (course.name && course.enrollments && course.enrollments.length > 0) {
-                // This 'grades' object contains the weighted calculation (80/20 split)
-                const weightedGrade = course.enrollments[0]?.grades?.current_score;
+            if (course.name && course.enrollments && course.enrollments[0]) {
+                const enrollment = course.enrollments[0];
                 
-                // If there's no score yet (like Homeroom), it shows N/A
-                const displayScore = weightedGrade !== undefined && weightedGrade !== null 
-                    ? weightedGrade + "%" 
-                    : "N/A";
+                // Priority 1: Weighted Grade (The 80/20 split)
+                // Priority 2: Current Score
+                // Priority 3: Final Score
+                const score = enrollment.grades?.current_score 
+                           || enrollment.computed_current_score 
+                           || enrollment.computed_final_score 
+                           || "N/A";
 
                 rows += `<tr>
                             <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                            <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${displayScore}</b></td>
+                            <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${score}${score !== "N/A" ? "%" : ""}</b></td>
                          </tr>`;
-                console.log(`Course: ${course.name} | Weighted Grade: ${displayScore}`);
+                console.log(`Course: ${course.name} | Grade: ${score}`);
             }
         });
 
@@ -43,21 +45,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Accurate Grade Report: ${new Date().toLocaleDateString()}`,
-            html: `
-                <div style="font-family: sans-serif;">
-                    <h2>Weighted Grade Report (80/20 Split)</h2>
-                    <table border="1" style="border-collapse: collapse; width: 100%; max-width: 400px;">
-                        <tr style="background: #eee;">
-                            <th style="padding:10px;">Course</th>
-                            <th style="padding:10px;">Grade</th>
-                        </tr>
-                        ${rows}
-                    </table>
-                </div>`
+            subject: `Updated Grade Report: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Your Grades</h3><table border="1" style="border-collapse:collapse;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: Weighted grades sent!");
+        console.log("✅ SUCCESS: Report Sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
