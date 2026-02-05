@@ -2,9 +2,8 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Individual Class Sync ---");
+    console.log("--- Starting Weighted Math Calculation ---");
     try {
-        // 1. Get all active courses
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
@@ -15,29 +14,46 @@ async function start() {
         for (const course of res.data) {
             if (!course.name) continue;
 
-            // 2. Fetch a fresh enrollment report for THIS specific class
-            // This pulls the deep 'grades' object that handles the 80/20 split
-            const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
-                params: { 'user_id': 'self' },
+            // 1. Get the 80/20 rules for this class
+            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            const enrollment = enrollRes.data[0];
-            const grades = enrollment?.grades;
+            let weightedSum = 0;
+            let totalWeightUsed = 0;
 
-            // FIX: We use final_score to ensure missing assignments (zeros) are counted.
-            // This is likely why Hogan says 64% in the app but 72% in the bot.
-            const score = grades?.final_score || grades?.current_score || "N/A";
+            // 2. Loop through Summative/Formative groups
+            groupsRes.data.forEach(group => {
+                const weight = group.group_weight || 0;
+                const score = group.unweighted_score; // This is the group's current %
+
+                if (weight > 0 && score !== null && score !== undefined) {
+                    weightedSum += (score * (weight / 100));
+                    totalWeightUsed += (weight / 100);
+                }
+            });
+
+            // 3. Calculate final %
+            let calculatedGrade = totalWeightUsed > 0 
+                ? (weightedSum / totalWeightUsed).toFixed(2) 
+                : null;
+
+            // FALLBACK: If teacher hasn't set up weights, use the App's Dashboard value
+            if (!calculatedGrade || calculatedGrade == 0) {
+                const enrollRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
+                    params: { 'user_id': 'self' },
+                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+                });
+                calculatedGrade = enrollRes.data[0]?.grades?.current_score || "N/A";
+            }
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${score}%</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${calculatedGrade}%</b></td>
                      </tr>`;
-            
-            console.log(`Verified ${course.name}: ${score}%`);
+            console.log(`Calculated ${course.name}: ${calculatedGrade}%`);
         }
 
-        // 3. Email Transport
         let transporter = nodemailer.createTransport({
             service: 'gmail',
             auth: { 
@@ -49,18 +65,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Dashboard Match Report: ${new Date().toLocaleDateString()}`,
-            html: `<div style="font-family:sans-serif;">
-                    <h2>Dashboard Matched Grades</h2>
-                    <p>This report matches the numbers shown on your Canvas Phone App.</p>
-                    <table border="1" style="border-collapse:collapse; width:100%; max-width:500px;">
-                        <tr style="background:#eee;"><th>Course</th><th>Grade</th></tr>
-                        ${rows}
-                    </table>
-                   </div>`
+            subject: `Manual Weighted Report: ${new Date().toLocaleDateString()}`,
+            html: `<h3>80/20 Manual Calculation Report</h3><table border="1" style="border-collapse:collapse;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: Individual class sync sent.");
+        console.log("✅ SUCCESS: Manual calculation sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message); 
         process.exit(1); 
