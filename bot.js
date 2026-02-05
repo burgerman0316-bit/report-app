@@ -13,7 +13,7 @@ async function start() {
         let rows = "";
         res.data.forEach(course => {
             if (course.name && course.enrollments) {
-                const score = course.enrollments[0]?.computed_current_score ?? "N/A";
+                const score = course.enrollments[0]?.computed_final_score ?? "N/A";
                 rows += `<tr><td>${course.name}</td><td><b>${score}%</b></td></tr>`;
                 console.log(`Found: ${course.name} - ${score}%`);
             }
