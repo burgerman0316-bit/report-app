@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Starting Forensic Grade Mining ---");
+    console.log("--- Executing Submission-Level Override ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
@@ -13,40 +13,28 @@ async function start() {
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // 1. Get Weighted Groups (Summative/Formative)
-            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
-                params: { 'include[]': ['assignments'], 'override_assignment_group_id': true },
+            // 1. Get ONLY the submissions for you in this course
+            const subRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/students/submissions`, {
+                params: { 'per_page': 100, 'include[]': ['assignment'] },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let weightedScore = 0;
-            let totalWeight = 0;
+            let ptsEarned = 0;
+            let ptsPossible = 0;
 
-            for (const group of groupsRes.data) {
-                const weight = group.group_weight || 0;
-                let groupEarned = 0;
-                let groupPossible = 0;
-
-                for (const a of (group.assignments || [])) {
-                    if (a.points_possible > 0) {
-                        groupPossible += a.points_possible;
-                        
-                        // 2. Look deep into the submission score
-                        // We use the score field directly from the assignment's submission object
-                        const score = a.submission?.score;
-                        groupEarned += (score !== null && score !== undefined) ? score : 0;
-                    }
+            // 2. Add up every score we find in the submission history
+            subRes.data.forEach(s => {
+                const max = s.assignment?.points_possible || 0;
+                if (max > 0) {
+                    ptsPossible += max;
+                    // If the score is null, it counts as 0 (The Hogan Penalty)
+                    ptsEarned += (s.score || 0);
                 }
+            });
 
-                if (groupPossible > 0 && weight > 0) {
-                    weightedScore += (groupEarned / groupPossible) * weight;
-                    totalWeight += weight;
-                }
-            }
-
-            // 3. Final Normalization
-            let finalVal = totalWeight > 0 
-                ? (weightedScore / (totalWeight / 100)).toFixed(2) 
+            // 3. Raw calculation (Earned / Possible)
+            let finalVal = ptsPossible > 0 
+                ? ((ptsEarned / ptsPossible) * 100).toFixed(2) 
                 : "0.00";
 
             rows += `<tr>
@@ -64,11 +52,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `FORENSIC REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Bypassing API "Hidden" Blocks</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `SUBMISSION OVERRIDE: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Bypassing Dashboard Locks via Submission History</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
 
-        console.log("✅ SUCCESS: Forensic report sent.");
+        console.log("✅ SUCCESS: Override report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message);
     }
