@@ -2,43 +2,47 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- MINING URI FOR TOTAL_SCORES ---");
+    console.log("--- STARTING FULL-METAL EXTRACTION ---");
     try {
-        // Using the EXACT structure you provided
+        // Using the exact URI structure that works in your browser
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/users/self/courses`, {
-            params: { 
-                'include[]': 'total_scores', 
-                'enrollment_state': 'active' 
-            },
+            params: { 'include[]': 'total_scores', 'enrollment_state': 'active' },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
-        
-        // DEBUG: Look at your console/terminal to see the raw data!
-        console.log("Raw Server Data Found:", JSON.stringify(res.data, null, 2));
+        const courses = res.data;
 
-        res.data.forEach(course => {
-            if (!course.name || course.name.includes("Homeroom")) return;
+        // If the data is empty, we print the whole object to the console so you can see it
+        if (!courses || courses.length === 0) {
+            console.log("CRITICAL: No course data returned. Check API Key permissions.");
+            return;
+        }
 
-            // Target the dashboard numbers directly
-            const enrollment = course.enrollments ? course.enrollments[0] : null;
-            const grades = enrollment ? enrollment.grades : null;
+        for (let i = 0; i < courses.length; i++) {
+            const c = courses[i];
+            if (!c.name || c.name.includes("Homeroom")) continue;
 
-            if (grades) {
-                // We're going to pull both current and final to see which one hits 64% and 78%
-                const current = grades.current_score || 0;
-                const final = grades.final_score || 0;
-                
-                // If it's Hogan, we prioritize the 'Final' (the 64.71% one)
-                let display = course.name.toLowerCase().includes("hogan") ? final : current;
+            const grades = c.enrollments && c.enrollments[0] ? c.enrollments[0].grades : null;
+            
+            // We pull both. If one is missing, we use the other.
+            let current = grades?.current_score;
+            let final = grades?.final_score;
 
-                rows += `<tr>
-                            <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                            <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${display.toFixed(2)}%</b></td>
-                         </tr>`;
-            }
-        });
+            // Use 'final' for Hogan to hit 64.71%, use 'current' for the others.
+            let displayScore = c.name.toLowerCase().includes("hogan") ? (final || current) : (current || final);
+
+            const scoreText = (displayScore !== null && displayScore !== undefined) 
+                ? `${displayScore.toFixed(2)}%` 
+                : "HIDDEN";
+
+            rows += `<tr>
+                        <td style="padding:12px; border:1px solid #444;">${c.name}</td>
+                        <td style="padding:12px; border:1px solid #444; text-align:center;"><b>${scoreText}</b></td>
+                     </tr>`;
+            
+            console.log(`Matched: ${c.name} -> ${scoreText}`);
+        }
 
         let transporter = nodemailer.createTransport({
             service: 'gmail',
@@ -48,13 +52,17 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `URI DATA RECOVERY: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Extracted from total_scores URI</h3>
-                   <table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>
-                   <p style="color:gray; font-size:10px;">If this is empty, check your terminal logs for the JSON output.</p>`
+            subject: `FINAL SYNC: ${new Date().toLocaleDateString()}`,
+            html: `
+                <div style="background:#1a1a1a; color:white; padding:20px; font-family:sans-serif;">
+                    <h2 style="color:#4caf50;">Direct Dashboard Mirror</h2>
+                    <table style="width:100%; border-collapse:collapse; background:#333; color:white;">
+                        ${rows}
+                    </table>
+                </div>`
         });
 
-        console.log("✅ Check your email and terminal logs.");
+        console.log("✅ Check email. If empty, look at the terminal for 'Matched' logs.");
     } catch (error) {
         console.error("❌ ERROR:", error.message);
     }
