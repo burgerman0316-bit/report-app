@@ -2,46 +2,59 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Bypassing Groups: Raw Submission Stream ---");
+    console.log("--- Executing Weighted Logic Sync ---");
     try {
-        // 1. Get the list of active courses
-        const coursesRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
+        const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'enrollment_state': 'active', 'per_page': 100 },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
-
-        for (const course of coursesRes.data) {
+        for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // 2. Get the RAW submission stream for this specific course
-            // This bypasses the "Assignment Group" locks that caused the 0.00%
-            const subRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/students/submissions`, {
-                params: { 'include[]': ['assignment'], 'per_page': 100 },
+            // 1. Get the Groups (Tests vs Homework) and their weights
+            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
+                params: { 'include[]': 'assignments' },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let earned = 0;
-            let possible = 0;
+            let totalWeightedScore = 0;
+            let totalWeightUsed = 0;
 
-            subRes.data.forEach(s => {
-                const max = s.assignment?.points_possible || 0;
-                if (max > 0) {
-                    possible += max;
-                    // Force 0 for missing work (The Hogan/Math penalty)
-                    earned += (s.score !== null && s.score !== undefined) ? s.score : 0;
+            for (const group of groupsRes.data) {
+                const weight = group.group_weight || 0;
+                let groupEarned = 0;
+                let groupPossible = 0;
+
+                // 2. Tally points within this specific weight group
+                if (group.assignments) {
+                    group.assignments.forEach(a => {
+                        if (a.points_possible > 0) {
+                            groupPossible += a.points_possible;
+                            // Grab the real score or force 0 for missing work
+                            groupEarned += (a.submission?.score || 0);
+                        }
+                    });
                 }
-            });
 
-            // 3. Calculate raw percentage
-            const percent = possible > 0 ? ((earned / possible) * 100).toFixed(2) : "0.00";
+                // 3. Apply the weight (e.g., Tests are 80% of the total)
+                if (groupPossible > 0 && weight > 0) {
+                    totalWeightedScore += (groupEarned / groupPossible) * weight;
+                    totalWeightUsed += weight;
+                }
+            }
+
+            // 4. Normalize to 100% scale
+            let finalVal = totalWeightUsed > 0 
+                ? (totalWeightedScore / (totalWeightUsed / 100)).toFixed(2) 
+                : "0.00";
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${percent}%</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalVal}%</b></td>
                      </tr>`;
-            console.log(`Streamed ${course.name}: ${percent}%`);
+            console.log(`${course.name}: ${finalVal}% (Weights applied)`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -50,12 +63,12 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas StreamBot" <${process.env.EMAIL_USER}>`,
+            from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `STREAM REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3 style="color:blue;">Raw Submission Stream (No Groups)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `WEIGHTED SYNC: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Applying Teacher Weighting (80/20)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-        console.log("✅ Stream Sync complete.");
+        console.log("✅ Weighted report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message);
     }
