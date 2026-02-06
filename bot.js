@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- Executing Final Weighted Recovery ---");
+    console.log("--- Executing Nuclear Submission Scan ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'per_page': 100, 'enrollment_state': 'active' },
@@ -13,44 +13,31 @@ async function start() {
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // 1. Get Weighted Groups (Summative 80%, etc.)
-            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
-                params: { 'include[]': ['assignments'], 'override_assignment_group_id': true },
+            // This hits the specific endpoint for YOUR submissions
+            const subRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/students/submissions`, {
+                params: { 'per_page': 100, 'include[]': ['assignment'] },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let weightedScore = 0;
-            let totalWeight = 0;
+            let earned = 0;
+            let possible = 0;
 
-            for (const group of groupsRes.data) {
-                const weight = group.group_weight || 0;
-                let earned = 0, possible = 0;
-
-                for (const a of (group.assignments || [])) {
-                    if (a.points_possible > 0) {
-                        possible += a.points_possible;
-                        // The Truth: Force 0 for missing/unscored work
-                        earned += (a.submission?.score || 0);
-                    }
+            subRes.data.forEach(s => {
+                const max = s.assignment?.points_possible || 0;
+                if (max > 0) {
+                    possible += max;
+                    // If score is null, it's a 0 (The Hogan Penalty)
+                    earned += (s.score !== null && s.score !== undefined) ? s.score : 0;
                 }
+            });
 
-                if (possible > 0 && weight > 0) {
-                    weightedScore += (earned / possible) * weight;
-                    totalWeight += weight;
-                }
-            }
+            let finalVal = possible > 0 ? ((earned / possible) * 100).toFixed(2) : "N/A";
 
-            // 2. Adjust for non-weighted classes (like PE)
-            let finalVal = totalWeight > 0 ? (weightedScore / (totalWeight / 100)).toFixed(2) : "0.00";
-            if (finalVal === "0.00") {
-                const enroll = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
-                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
-                });
-                finalVal = (enroll.data[0]?.grades?.current_score || 0).toFixed(2);
-            }
-
-            rows += `<tr><td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                     <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalVal}%</b></td></tr>`;
+            rows += `<tr>
+                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalVal}%</b></td>
+                     </tr>`;
+            console.log(`${course.name}: ${finalVal}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -59,12 +46,12 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas TruthBot" <${process.env.EMAIL_USER}>`,
+            from: `"Canvas NuclearBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `THE TRUTH REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `NUCLEAR REPORT: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Raw Submission Point Tally (Bypassing All Blocks)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-        console.log("✅ Final Sync Sent.");
-    } catch (error) { console.error(error.message); }
+        console.log("✅ Nuclear Sync Sent.");
+    } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
