@@ -2,46 +2,58 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- STARTING FULL-METAL EXTRACTION ---");
+    console.log("--- Starting Forensic Grade Mining ---");
     try {
-        // Using the exact URI structure that works in your browser
-        const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/users/self/courses`, {
-            params: { 'include[]': 'total_scores', 'enrollment_state': 'active' },
+        const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
+            params: { 'per_page': 100, 'enrollment_state': 'active' },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
-        const courses = res.data;
+        for (const course of res.data) {
+            if (!course.name || course.name.includes("Homeroom")) continue;
 
-        // If the data is empty, we print the whole object to the console so you can see it
-        if (!courses || courses.length === 0) {
-            console.log("CRITICAL: No course data returned. Check API Key permissions.");
-            return;
-        }
+            // 1. Get Weighted Groups (Summative/Formative)
+            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
+                params: { 'include[]': ['assignments'], 'override_assignment_group_id': true },
+                headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+            });
 
-        for (let i = 0; i < courses.length; i++) {
-            const c = courses[i];
-            if (!c.name || c.name.includes("Homeroom")) continue;
+            let weightedScore = 0;
+            let totalWeight = 0;
 
-            const grades = c.enrollments && c.enrollments[0] ? c.enrollments[0].grades : null;
-            
-            // We pull both. If one is missing, we use the other.
-            let current = grades?.current_score;
-            let final = grades?.final_score;
+            for (const group of groupsRes.data) {
+                const weight = group.group_weight || 0;
+                let groupEarned = 0;
+                let groupPossible = 0;
 
-            // Use 'final' for Hogan to hit 64.71%, use 'current' for the others.
-            let displayScore = c.name.toLowerCase().includes("hogan") ? (final || current) : (current || final);
+                for (const a of (group.assignments || [])) {
+                    if (a.points_possible > 0) {
+                        groupPossible += a.points_possible;
+                        
+                        // 2. Look deep into the submission score
+                        // We use the score field directly from the assignment's submission object
+                        const score = a.submission?.score;
+                        groupEarned += (score !== null && score !== undefined) ? score : 0;
+                    }
+                }
 
-            const scoreText = (displayScore !== null && displayScore !== undefined) 
-                ? `${displayScore.toFixed(2)}%` 
-                : "HIDDEN";
+                if (groupPossible > 0 && weight > 0) {
+                    weightedScore += (groupEarned / groupPossible) * weight;
+                    totalWeight += weight;
+                }
+            }
+
+            // 3. Final Normalization
+            let finalVal = totalWeight > 0 
+                ? (weightedScore / (totalWeight / 100)).toFixed(2) 
+                : "0.00";
 
             rows += `<tr>
-                        <td style="padding:12px; border:1px solid #444;">${c.name}</td>
-                        <td style="padding:12px; border:1px solid #444; text-align:center;"><b>${scoreText}</b></td>
+                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalVal}%</b></td>
                      </tr>`;
-            
-            console.log(`Matched: ${c.name} -> ${scoreText}`);
+            console.log(`${course.name}: ${finalVal}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -52,17 +64,11 @@ async function start() {
         await transporter.sendMail({
             from: `"Canvas GradeBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `FINAL SYNC: ${new Date().toLocaleDateString()}`,
-            html: `
-                <div style="background:#1a1a1a; color:white; padding:20px; font-family:sans-serif;">
-                    <h2 style="color:#4caf50;">Direct Dashboard Mirror</h2>
-                    <table style="width:100%; border-collapse:collapse; background:#333; color:white;">
-                        ${rows}
-                    </table>
-                </div>`
+            subject: `FORENSIC REPORT: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Bypassing API "Hidden" Blocks</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
 
-        console.log("✅ Check email. If empty, look at the terminal for 'Matched' logs.");
+        console.log("✅ SUCCESS: Forensic report sent.");
     } catch (error) {
         console.error("❌ ERROR:", error.message);
     }
