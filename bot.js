@@ -2,65 +2,46 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- FINAL MASTER SYNC: WEIGHTED ENGINE ---");
+    console.log("--- Bypassing Groups: Raw Submission Stream ---");
     try {
-        const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
-            params: { 'per_page': 100, 'enrollment_state': 'active' },
+        // 1. Get the list of active courses
+        const coursesRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
+            params: { 'enrollment_state': 'active', 'per_page': 100 },
             headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
         });
 
         let rows = "";
-        for (const course of res.data) {
+
+        for (const course of coursesRes.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            // 1. Get Weighted Groups AND every assignment score
-            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
-                params: { 'include[]': 'assignments', 'override_assignment_group_id': true },
+            // 2. Get the RAW submission stream for this specific course
+            // This bypasses the "Assignment Group" locks that caused the 0.00%
+            const subRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/students/submissions`, {
+                params: { 'include[]': ['assignment'], 'per_page': 100 },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let courseWeightedSum = 0;
-            let courseTotalWeight = 0;
+            let earned = 0;
+            let possible = 0;
 
-            for (const group of groupsRes.data) {
-                const weight = group.group_weight || 0;
-                let groupEarned = 0;
-                let groupPossible = 0;
-
-                for (const a of (group.assignments || [])) {
-                    if (a.points_possible > 0) {
-                        groupPossible += a.points_possible;
-                        // Grab score; if null/missing, it's a 0 (The Truth)
-                        const score = a.submission?.score;
-                        groupEarned += (score !== null && score !== undefined) ? score : 0;
-                    }
+            subRes.data.forEach(s => {
+                const max = s.assignment?.points_possible || 0;
+                if (max > 0) {
+                    possible += max;
+                    // Force 0 for missing work (The Hogan/Math penalty)
+                    earned += (s.score !== null && s.score !== undefined) ? s.score : 0;
                 }
+            });
 
-                // 2. Apply Weighting (e.g., if you have 80% in a group weighted at 40% of grade)
-                if (groupPossible > 0 && weight > 0) {
-                    courseWeightedSum += (groupEarned / groupPossible) * weight;
-                    courseTotalWeight += weight;
-                }
-            }
-
-            // 3. Final Calculation (Normalize to 100%)
-            let finalGrade = courseTotalWeight > 0 
-                ? (courseWeightedSum / (courseTotalWeight / 100)).toFixed(2) 
-                : "0.00";
-
-            // Fallback for non-weighted classes (like Art/PE)
-            if (finalGrade === "0.00") {
-                const enroll = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
-                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
-                });
-                finalGrade = (enroll.data[0]?.grades?.current_score || 0).toFixed(2);
-            }
+            // 3. Calculate raw percentage
+            const percent = possible > 0 ? ((earned / possible) * 100).toFixed(2) : "0.00";
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:right;"><b>${finalGrade}%</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${percent}%</b></td>
                      </tr>`;
-            console.log(`Synced ${course.name}: ${finalGrade}%`);
+            console.log(`Streamed ${course.name}: ${percent}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -69,12 +50,14 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas MasterBot" <${process.env.EMAIL_USER}>`,
+            from: `"Canvas StreamBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `MASTER WEIGHT REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Manual Weighted Calculation (Mobile App Clone)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `STREAM REPORT: ${new Date().toLocaleDateString()}`,
+            html: `<h3 style="color:blue;">Raw Submission Stream (No Groups)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-        console.log("✅ Master Sync complete.");
-    } catch (error) { console.error("❌ ERROR:", error.message); }
+        console.log("✅ Stream Sync complete.");
+    } catch (error) {
+        console.error("❌ ERROR:", error.message);
+    }
 }
 start();
