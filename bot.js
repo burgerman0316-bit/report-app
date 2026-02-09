@@ -3,7 +3,7 @@ const nodemailer = require('nodemailer');
 
 async function start() {
     const now = new Date();
-    const term4Start = new Date('2026-03-12'); // Auto-reset in 32 days
+    const term4Start = new Date('2026-03-12'); 
     const term3Start = new Date('2026-01-05');
     let termStartDate = (now < term4Start) ? term3Start : term4Start;
 
@@ -22,34 +22,35 @@ async function start() {
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let sEarned = 0, sMax = 0, fEarned = 0, fMax = 0;
-            let totalEarned = 0, totalMax = 0;
+            let sEarn = 0, sMax = 0, fEarn = 0, fMax = 0;
+            let rawEarn = 0, rawMax = 0;
 
             subRes.data.forEach(s => {
                 const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
-                const name = s.assignment?.name || "";
-                
-                if (dueDate >= termStartDate && s.score !== null && s.assignment?.points_possible > 0) {
-                    totalEarned += s.score;
-                    totalMax += s.assignment.points_possible;
+                const name = (s.assignment?.name || "").toLowerCase();
+                const score = s.score;
+                const points = s.assignment?.points_possible;
 
-                    // Identify Weights (80/20)
-                    if (name.includes("Summative") || name.includes("Test") || name.includes("Project")) {
-                        sEarned += s.score;
-                        sMax += s.assignment.points_possible;
+                if (dueDate >= termStartDate && score !== null && points > 0) {
+                    rawEarn += score;
+                    rawMax += points;
+
+                    // Expanded Keyword Check for 80% Category
+                    if (name.includes("sum") || name.includes("test") || name.includes("quiz") || name.includes("exam") || name.includes("project") || name.includes("assessment")) {
+                        sEarn += score;
+                        sMax += points;
                     } else {
-                        fEarned += s.score;
-                        fMax += s.assignment.points_possible;
+                        fEarn += score;
+                        fMax += points;
                     }
                 }
             });
 
             let finalNum = 0;
-            // Use 80/20 weights if both exist; otherwise use raw totals
             if (sMax > 0 && fMax > 0) {
-                finalNum = ((sEarned / sMax) * 80) + ((fEarned / fMax) * 20);
+                finalNum = ((sEarn / sMax) * 80) + ((fEarn / fMax) * 20);
             } else {
-                finalNum = totalMax > 0 ? (totalEarned / totalMax) * 100 : 0;
+                finalNum = rawMax > 0 ? (rawEarn / rawMax) * 100 : 0;
             }
 
             const percent = finalNum.toFixed(2);
@@ -75,7 +76,7 @@ async function start() {
             subject: `Grade Report`,
             html: `<table border="1" style="border-collapse:collapse; width:100%; border:1px solid #333;">${rows}</table>`
         });
-        console.log("✅ Weighted Grade Report Sent.");
+        console.log("✅ Sync Complete.");
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
