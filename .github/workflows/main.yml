@@ -31,4 +31,4 @@ jobs:
           TARGET_EMAIL: "carterdiesel957@gmail.com"
           EMAIL_USER: ${{ secrets.EMAIL_USER }}
           EMAIL_PASS: ${{ secrets.EMAIL_PASS }}
-        run: node recalc.js
+        run: node bot.js
