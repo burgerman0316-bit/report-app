@@ -3,6 +3,7 @@ const nodemailer = require('nodemailer');
 
 async function start() {
     const now = new Date();
+    // Reset dates: Feb 8 + 32 days = March 12
     const term4Start = new Date('2026-03-12'); 
     const term3Start = new Date('2026-01-05');
     let termStartDate = (now < term4Start) ? term3Start : term4Start;
@@ -23,7 +24,7 @@ async function start() {
             });
 
             let sEarn = 0, sMax = 0, fEarn = 0, fMax = 0;
-            let rawEarn = 0, rawMax = 0;
+            let totalEarned = 0, totalMax = 0;
 
             subRes.data.forEach(s => {
                 const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
@@ -31,12 +32,13 @@ async function start() {
                 const score = s.score;
                 const points = s.assignment?.points_possible;
 
+                // Toggle logic: Only count graded items from the current term
                 if (dueDate >= termStartDate && score !== null && points > 0) {
-                    rawEarn += score;
-                    rawMax += points;
+                    totalEarned += score;
+                    totalMax += points;
 
-                    // Expanded Keyword Check for 80% Category
-                    if (name.includes("sum") || name.includes("test") || name.includes("quiz") || name.includes("exam") || name.includes("project") || name.includes("assessment")) {
+                    // Keyword check for Weights (Summative/Formative)
+                    if (name.includes("sum") || name.includes("test") || name.includes("quiz") || name.includes("exam") || name.includes("project")) {
                         sEarn += score;
                         sMax += points;
                     } else {
@@ -47,10 +49,14 @@ async function start() {
             });
 
             let finalNum = 0;
-            if (sMax > 0 && fMax > 0) {
+            let rawPercent = totalMax > 0 ? (totalEarned / totalMax) * 100 : 0;
+            
+            // Apply 80/20 weights ONLY to ELA to fix the 66% vs 74% issue
+            if (course.name.toLowerCase().includes("ela") && sMax > 0 && fMax > 0) {
                 finalNum = ((sEarn / sMax) * 80) + ((fEarn / fMax) * 20);
             } else {
-                finalNum = rawMax > 0 ? (rawEarn / rawMax) * 100 : 0;
+                // Use raw points for Math, Science, and Hogan to keep them accurate
+                finalNum = rawPercent;
             }
 
             const percent = finalNum.toFixed(2);
@@ -76,7 +82,7 @@ async function start() {
             subject: `Grade Report`,
             html: `<table border="1" style="border-collapse:collapse; width:100%; border:1px solid #333;">${rows}</table>`
         });
-        console.log("✅ Sync Complete.");
+        console.log(`✅ Sync Complete for ${termStartDate.toLocaleDateString()}`);
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
