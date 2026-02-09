@@ -3,14 +3,12 @@ const nodemailer = require('nodemailer');
 
 async function start() {
     const now = new Date();
-    // CALIBRATED DATE: 32 days from Feb 8th
+    // EXACT DATE: March 12th is your Term 4 reset
     const term4Start = new Date('2026-03-12');
     const term3Start = new Date('2026-01-05');
 
     let termStartDate = (now < term4Start) ? term3Start : term4Start;
 
-    console.log(`--- SYNCING FOR TERM START: ${termStartDate.toLocaleDateString()} ---`);
-    
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'enrollment_state': 'active', 'per_page': 100 },
@@ -32,6 +30,8 @@ async function start() {
             subRes.data.forEach(s => {
                 const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
                 const max = s.assignment?.points_possible || 0;
+                
+                // Only count graded items from the current term
                 if (dueDate >= termStartDate && max > 0 && s.score !== null && s.score !== undefined) {
                     earned += s.score;
                     possible += max;
@@ -41,7 +41,6 @@ async function start() {
             const num = possible > 0 ? (earned / possible) * 100 : 0;
             const percent = num.toFixed(2);
 
-            // --- GRADE LETTER LOGIC ---
             let letter = "F";
             if (num >= 90) letter = "A";
             else if (num >= 80) letter = "B";
@@ -49,10 +48,10 @@ async function start() {
             else if (num >= 60) letter = "D";
 
             rows += `<tr>
-                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;">
+                        <td style="padding:12px; border:1px solid #333; font-family:sans-serif;">${course.name}</td>
+                        <td style="padding:12px; border:1px solid #333; text-align:center; font-family:sans-serif;">
                             <span style="font-size:18px;"><b>${percent}%</b></span><br>
-                            <span style="color:#666;">(${letter})</span>
+                            <span style="color:#666;">${letter}</span>
                         </td>
                      </tr>`;
         }
@@ -63,15 +62,14 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas Dashboard" <${process.env.EMAIL_USER}>`,
+            from: `"Grade Bot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `CURRENT TERM REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3 style="font-family:sans-serif;">Current Term Grades (Started ${termStartDate.toLocaleDateString()})</h3>
-                   <table border="1" style="border-collapse:collapse; width:100%; font-family:sans-serif;">
+            subject: `Grade Report`, // Simplified subject
+            html: `<table border="1" style="border-collapse:collapse; width:100%; border:1px solid #333;">
                    ${rows}
                    </table>`
         });
-        console.log("✅ Accurate Auto-Term Sync Sent.");
+        console.log(`✅ Report Sent. Current Filter: ${termStartDate.toLocaleDateString()}`);
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
