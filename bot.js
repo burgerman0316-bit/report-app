@@ -2,7 +2,21 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- STARTING FORENSIC DATA RECOVERY ---");
+    // --- AUTOMATIC TERM DETECTION ---
+    const now = new Date();
+    let termStartDate;
+
+    // Adjust these months/days to match your school's actual calendar
+    if (now < new Date('2026-03-23')) {
+        // We are in Term 3
+        termStartDate = new Date('2026-01-05'); 
+    } else {
+        // It is now March 23rd or later -> Term 4 has started
+        termStartDate = new Date('2026-03-23'); 
+    }
+
+    console.log(`--- SYNCING FOR TERM START: ${termStartDate.toLocaleDateString()} ---`);
+    
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'enrollment_state': 'active', 'per_page': 100 },
@@ -12,10 +26,7 @@ async function start() {
         let rows = "";
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
-            
-            console.log(`\n--- COURSE: ${course.name} ---`);
 
-            // Pull raw submissions for the specific course
             const subRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/students/submissions`, {
                 params: { 'include[]': 'assignment', 'per_page': 100 },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
@@ -23,29 +34,24 @@ async function start() {
 
             let earned = 0;
             let possible = 0;
-            let gradedCount = 0;
 
             subRes.data.forEach(s => {
+                const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
                 const max = s.assignment?.points_possible || 0;
-                const score = s.score;
-
-                if (max > 0 && score !== null && score !== undefined) {
-                    console.log(`[GRADED] ${s.assignment.name}: ${score}/${max}`);
-                    earned += score;
+                
+                // Only count items from the CURRENT Term
+                if (dueDate >= termStartDate && max > 0 && s.score !== null && s.score !== undefined) {
+                    earned += s.score;
                     possible += max;
-                    gradedCount++;
-                } else if (max > 0) {
-                    console.log(`[SKIPPED] ${s.assignment?.name || 'Unknown'}: No score yet.`);
                 }
             });
 
             const percent = possible > 0 ? ((earned / possible) * 100).toFixed(2) : "0.00";
-            console.log(`TOTAL FOR ${course.name}: ${earned}/${possible} (${percent}%)`);
 
             rows += `<tr>
-                <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${percent}%</b><br><small>${gradedCount} items</small></td>
-            </tr>`;
+                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${percent}%</b></td>
+                     </tr>`;
         }
 
         let transporter = nodemailer.createTransport({
@@ -54,12 +60,13 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas ForensicBot" <${process.env.EMAIL_USER}>`,
+            from: `"Canvas AutoTerm" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `FORENSIC REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Raw Point Totals (Graded Only)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `AUTO-TERM REPORT: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Current Term Grades (Started ${termStartDate.toLocaleDateString()})</h3>
+                   <table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-        console.log("\n✅ Forensic report sent.");
+        console.log("✅ Auto-Term Sync Sent.");
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
