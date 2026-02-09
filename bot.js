@@ -3,10 +3,14 @@ const nodemailer = require('nodemailer');
 
 async function start() {
     const now = new Date();
-    const term4Start = new Date('2026-03-12'); 
+    // CALIBRATED DATE: 32 days from Feb 8th
+    const term4Start = new Date('2026-03-12');
     const term3Start = new Date('2026-01-05');
+
     let termStartDate = (now < term4Start) ? term3Start : term4Start;
 
+    console.log(`--- SYNCING FOR TERM START: ${termStartDate.toLocaleDateString()} ---`);
+    
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'enrollment_state': 'active', 'per_page': 100 },
@@ -22,59 +26,33 @@ async function start() {
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let sEarn = 0, sMax = 0, fEarn = 0, fMax = 0;
-            let totalEarned = 0, totalMax = 0;
+            let earned = 0;
+            let possible = 0;
 
             subRes.data.forEach(s => {
                 const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
-                const name = (s.assignment?.name || "").toLowerCase();
-                const score = s.score;
-                const points = s.assignment?.points_possible;
-
-                if (dueDate >= termStartDate && score !== null && points > 0) {
-                    totalEarned += score;
-                    totalMax += points;
-
-                    // Improved Keyword Search
-                    if (name.includes("sum") || name.includes("test") || name.includes("quiz") || name.includes("exam") || name.includes("assess")) {
-                        sEarn += score;
-                        sMax += points;
-                    } else {
-                        fEarn += score;
-                        fMax += points;
-                    }
+                const max = s.assignment?.points_possible || 0;
+                if (dueDate >= termStartDate && max > 0 && s.score !== null && s.score !== undefined) {
+                    earned += s.score;
+                    possible += max;
                 }
             });
 
-            let finalDisplay = "N/A";
-            let letter = "-";
+            const num = possible > 0 ? (earned / possible) * 100 : 0;
+            const percent = num.toFixed(2);
 
-            if (totalMax > 0) {
-                let finalNum = 0;
-                let rawPercent = (totalEarned / totalMax) * 100;
-
-                // ELA Specific 80/20 logic
-                if (course.name.toLowerCase().includes("ela")) {
-                    if (sMax > 0 && fMax > 0) {
-                        finalNum = ((sEarn / sMax) * 80) + ((fEarn / fMax) * 20);
-                    } else if (sMax > 0) {
-                        finalNum = (sEarn / sMax) * 100;
-                    } else {
-                        finalNum = (fEarn / fMax) * 100;
-                    }
-                } else {
-                    finalNum = rawPercent;
-                }
-
-                finalDisplay = finalNum.toFixed(2) + "%";
-                letter = finalNum >= 90 ? "A" : finalNum >= 80 ? "B" : finalNum >= 70 ? "C" : finalNum >= 60 ? "D" : "F";
-            }
+            // --- GRADE LETTER LOGIC ---
+            let letter = "F";
+            if (num >= 90) letter = "A";
+            else if (num >= 80) letter = "B";
+            else if (num >= 70) letter = "C";
+            else if (num >= 60) letter = "D";
 
             rows += `<tr>
-                        <td style="padding:12px; border:1px solid #333; font-family:sans-serif;">${course.name}</td>
-                        <td style="padding:12px; border:1px solid #333; text-align:center; font-family:sans-serif;">
-                            <span style="font-size:18px;"><b>${finalDisplay}</b></span><br>
-                            <span style="color:#666;">${letter}</span>
+                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:center;">
+                            <span style="font-size:18px;"><b>${percent}%</b></span><br>
+                            <span style="color:#666;">(${letter})</span>
                         </td>
                      </tr>`;
         }
@@ -85,12 +63,15 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Grade Bot" <${process.env.EMAIL_USER}>`,
+            from: `"Canvas Dashboard" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `Grade Report`,
-            html: `<table border="1" style="border-collapse:collapse; width:100%; border:1px solid #333;">${rows}</table>`
+            subject: `CURRENT TERM REPORT: ${new Date().toLocaleDateString()}`,
+            html: `<h3 style="font-family:sans-serif;">Current Term Grades (Started ${termStartDate.toLocaleDateString()})</h3>
+                   <table border="1" style="border-collapse:collapse; width:100%; font-family:sans-serif;">
+                   ${rows}
+                   </table>`
         });
-        console.log("✅ Final Polish Sync Sent.");
+        console.log("✅ Accurate Auto-Term Sync Sent.");
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
