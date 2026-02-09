@@ -3,14 +3,10 @@ const nodemailer = require('nodemailer');
 
 async function start() {
     const now = new Date();
-    // CALIBRATED DATE: 32 days from Feb 8th
-    const term4Start = new Date('2026-03-12');
+    const term4Start = new Date('2026-03-12'); // Auto-reset in 32 days
     const term3Start = new Date('2026-01-05');
-
     let termStartDate = (now < term4Start) ? term3Start : term4Start;
 
-    console.log(`--- SYNCING FOR TERM START: ${termStartDate.toLocaleDateString()} ---`);
-    
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'enrollment_state': 'active', 'per_page': 100 },
@@ -26,33 +22,44 @@ async function start() {
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let earned = 0;
-            let possible = 0;
+            let sEarned = 0, sMax = 0, fEarned = 0, fMax = 0;
+            let totalEarned = 0, totalMax = 0;
 
             subRes.data.forEach(s => {
                 const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
-                const max = s.assignment?.points_possible || 0;
-                if (dueDate >= termStartDate && max > 0 && s.score !== null && s.score !== undefined) {
-                    earned += s.score;
-                    possible += max;
+                const name = s.assignment?.name || "";
+                
+                if (dueDate >= termStartDate && s.score !== null && s.assignment?.points_possible > 0) {
+                    totalEarned += s.score;
+                    totalMax += s.assignment.points_possible;
+
+                    // Identify Weights (80/20)
+                    if (name.includes("Summative") || name.includes("Test") || name.includes("Project")) {
+                        sEarned += s.score;
+                        sMax += s.assignment.points_possible;
+                    } else {
+                        fEarned += s.score;
+                        fMax += s.assignment.points_possible;
+                    }
                 }
             });
 
-            const num = possible > 0 ? (earned / possible) * 100 : 0;
-            const percent = num.toFixed(2);
+            let finalNum = 0;
+            // Use 80/20 weights if both exist; otherwise use raw totals
+            if (sMax > 0 && fMax > 0) {
+                finalNum = ((sEarned / sMax) * 80) + ((fEarned / fMax) * 20);
+            } else {
+                finalNum = totalMax > 0 ? (totalEarned / totalMax) * 100 : 0;
+            }
 
-            // --- GRADE LETTER LOGIC ---
-            let letter = "F";
-            if (num >= 90) letter = "A";
-            else if (num >= 80) letter = "B";
-            else if (num >= 70) letter = "C";
-            else if (num >= 60) letter = "D";
+            const percent = finalNum.toFixed(2);
+            let letter = finalNum >= 90 ? "A" : finalNum >= 80 ? "B" : finalNum >= 70 ? "C" : finalNum >= 60 ? "D" : "F";
 
             rows += `<tr>
-                        <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;">
+                        <td style="padding:12px; border:1px solid #333; font-family:sans-serif;">${course.name}</td>
+                        <td style="padding:12px; border:1px solid #333; text-align:center; font-family:sans-serif;">
                             <span style="font-size:18px;"><b>${percent}%</b></span><br>
-                            <span style="color:#666;">(${letter})</span>
+                            <span style="color:#666;">${letter}</span>
                         </td>
                      </tr>`;
         }
@@ -63,15 +70,12 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas Dashboard" <${process.env.EMAIL_USER}>`,
+            from: `"Grade Bot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `CURRENT TERM REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3 style="font-family:sans-serif;">Current Term Grades (Started ${termStartDate.toLocaleDateString()})</h3>
-                   <table border="1" style="border-collapse:collapse; width:100%; font-family:sans-serif;">
-                   ${rows}
-                   </table>`
+            subject: `Grade Report`,
+            html: `<table border="1" style="border-collapse:collapse; width:100%; border:1px solid #333;">${rows}</table>`
         });
-        console.log("✅ Accurate Auto-Term Sync Sent.");
+        console.log("✅ Weighted Grade Report Sent.");
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
