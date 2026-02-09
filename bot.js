@@ -22,36 +22,36 @@ async function start() {
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            // Universal 80/20 Weighted Logic
             let sEarned = 0, sMax = 0, fEarned = 0, fMax = 0;
+            let totalEarned = 0, totalMax = 0;
 
             subRes.data.forEach(s => {
                 const dueDate = new Date(s.assignment?.due_at || s.assignment?.created_at);
                 const name = s.assignment?.name || "";
                 
-                // Only count graded items from the current term (Toggle ON logic)
                 if (dueDate >= termStartDate && s.score !== null && s.assignment?.points_possible > 0) {
+                    totalEarned += s.score;
+                    totalMax += s.assignment.points_possible;
+
+                    // Check for weighting keywords
                     if (name.includes("Summative") || name.includes("Test") || name.includes("Project")) {
                         sEarned += s.score;
                         sMax += s.assignment.points_possible;
-                    } else {
+                    } else if (name.includes("Formative") || name.includes("Daily") || name.includes("Homework")) {
                         fEarned += s.score;
                         fMax += s.assignment.points_possible;
                     }
                 }
             });
 
-            const sScore = sMax > 0 ? (sEarned / sMax) : 0;
-            const fScore = fMax > 0 ? (fEarned / fMax) : 0;
-
             let finalNum = 0;
-            // Apply weights if both categories have grades; otherwise, scale to 100
+            // 1. Try Weighted Math first
             if (sMax > 0 && fMax > 0) {
-                finalNum = (sScore * 80) + (fScore * 20);
-            } else if (sMax > 0) {
-                finalNum = sScore * 100;
-            } else if (fMax > 0) {
-                finalNum = fScore * 100;
+                finalNum = ((sEarned / sMax) * 80) + ((fEarned / fMax) * 20);
+            } 
+            // 2. Fallback to Raw Math if weighting keywords aren't found
+            else {
+                finalNum = totalMax > 0 ? (totalEarned / totalMax) * 100 : 0;
             }
 
             const percent = finalNum.toFixed(2);
@@ -77,7 +77,7 @@ async function start() {
             subject: `Grade Report`,
             html: `<table border="1" style="border-collapse:collapse; width:100%; border:1px solid #333;">${rows}</table>`
         });
-        console.log("✅ Universal Weighted Report Sent.");
+        console.log("✅ Report Sent. No more NaNs!");
     } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
