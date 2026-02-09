@@ -2,7 +2,7 @@ const axios = require('axios');
 const nodemailer = require('nodemailer');
 
 async function start() {
-    console.log("--- SYNCING TO 'GRADED ONLY' VIEW ---");
+    console.log("--- FINAL SYNC: WEIGHTED + GRADED ONLY ---");
     try {
         const res = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses`, {
             params: { 'enrollment_state': 'active', 'per_page': 100 },
@@ -13,32 +13,50 @@ async function start() {
         for (const course of res.data) {
             if (!course.name || course.name.includes("Homeroom")) continue;
 
-            const subRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/students/submissions`, {
-                params: { 'include[]': ['assignment'], 'per_page': 100 },
+            const groupsRes = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/assignment_groups`, {
+                params: { 'include[]': 'assignments' },
                 headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
             });
 
-            let earned = 0;
-            let possible = 0;
+            let courseWeightedSum = 0;
+            let courseTotalWeight = 0;
 
-            subRes.data.forEach(s => {
-                const max = s.assignment?.points_possible || 0;
-                
-                // THE FIX: Only count points if there is a real score (Toggle = ON)
-                // This ignores the "Missing" assignments that were tanking your grade to a D
-                if (max > 0 && s.score !== null && s.score !== undefined) {
-                    earned += s.score;
-                    possible += max;
+            for (const group of groupsRes.data) {
+                const weight = group.group_weight || 0;
+                let groupEarned = 0;
+                let groupPossible = 0;
+
+                for (const a of (group.assignments || [])) {
+                    // MATCH YOUR PHONE: Only count if it has been GRADED
+                    if (a.points_possible > 0 && a.submission?.score !== null && a.submission?.score !== undefined) {
+                        groupEarned += a.submission.score;
+                        groupPossible += a.points_possible;
+                    }
                 }
-            });
 
-            const finalVal = possible > 0 ? ((earned / possible) * 100).toFixed(2) : "0.00";
+                if (groupPossible > 0 && weight > 0) {
+                    courseWeightedSum += (groupEarned / groupPossible) * weight;
+                    courseTotalWeight += weight;
+                }
+            }
+
+            // Fallback for non-weighted classes
+            let finalGrade = courseTotalWeight > 0 
+                ? (courseWeightedSum / (courseTotalWeight / 100)).toFixed(2) 
+                : "0.00";
+
+            if (finalGrade === "0.00") {
+                const enroll = await axios.get(`${process.env.CANVAS_URL}/api/v1/courses/${course.id}/enrollments`, {
+                    headers: { 'Authorization': `Bearer ${process.env.CANVAS_API_KEY}` }
+                });
+                finalGrade = (enroll.data[0]?.grades?.current_score || 0).toFixed(2);
+            }
 
             rows += `<tr>
                         <td style="padding:10px; border:1px solid #ddd;">${course.name}</td>
-                        <td style="padding:10px; border:1px solid #ddd; text-align:center;"><b>${finalVal}%</b></td>
+                        <td style="padding:10px; border:1px solid #ddd; text-align:right;"><b>${finalGrade}%</b></td>
                      </tr>`;
-            console.log(`${course.name}: ${finalVal}% (Ignoring Missing)`);
+            console.log(`Synced ${course.name}: ${finalGrade}%`);
         }
 
         let transporter = nodemailer.createTransport({
@@ -47,12 +65,12 @@ async function start() {
         });
 
         await transporter.sendMail({
-            from: `"Canvas Sync" <${process.env.EMAIL_USER}>`,
+            from: `"Canvas MasterBot" <${process.env.EMAIL_USER}>`,
             to: "carterdiesel957@gmail.com", 
-            subject: `GRADED-ONLY REPORT: ${new Date().toLocaleDateString()}`,
-            html: `<h3>Toggle ON: Ignoring Missing Work</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
+            subject: `MASTER SYNC: ${new Date().toLocaleDateString()}`,
+            html: `<h3>Weighted Dashboard Mirror (Toggle ON)</h3><table border="1" style="border-collapse:collapse; width:100%;">${rows}</table>`
         });
-        console.log("✅ Graded-only sync sent.");
-    } catch (error) { console.error(error.message); }
+        console.log("✅ Master Sync complete.");
+    } catch (error) { console.error("❌ ERROR:", error.message); }
 }
 start();
