@@ -77,7 +77,7 @@ async function start() {
 
         await transporter.sendMail({
             from: `"Grade Bot" <${process.env.EMAIL_USER}>`,
-            to: "carterdiesel957@gmail.com", 
+            to: "carolynbydesign7@yahoo.com", 
             subject: `Grade Report`,
             html: `<table border="1" style="border-collapse:collapse; width:100%; font-family:sans-serif;">${rows}</table>`
         });
