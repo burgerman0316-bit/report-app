@@ -3,7 +3,7 @@ name: Send Weekly Grades
 on:
   schedule:
     # This runs at 22:00 UTC (5:00 PM EST) every Friday
-    - cron: '0 22 * * 5'
+    - cron: '0 23 * * 5'
   # This button allows you to send the report manually from GitHub
   workflow_dispatch:
 
